@@ -1,0 +1,12 @@
+{
+    "Applications": [
+        {
+            "Name": "7-Zip",
+            "Version": "23.01"
+        },
+        {
+            "Name": "WinRAR 7.01 (64-bit)",
+            "Version": "6.01.0"
+        }
+    ]
+}
