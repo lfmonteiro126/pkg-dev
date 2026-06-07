@@ -1,148 +1,141 @@
-﻿#Usage Mode
+# Get-detect.ps1
+# Detection script for hardware, software inventory and application version detection
+# Author: Luiz Monteiro
 
-# Hardware mode
-# .\Get-detect.ps1 -Hardware
+# Usage Examples:
+# Hardware mode:      .\Get-detect.ps1 -Hardware
+# Software mode:      .\Get-detect.ps1 -Software
+# Current user:       .\Get-detect.ps1 -Software -CurrentUser
+# Detection mode:     .\Get-detect.ps1 -Detect .\detect_apps.json
+# Note: To bypass execution policy: powershell -ExecutionPolicy Bypass -File "C:\Path\To\Get-detect.ps1"
 
-# Software mode
-# .\Get-detect.ps1 -Software
-
-# Software mode (current user)
-# .\Get-detect.ps1 -Software -CurrentUser
-
-# Detection mode
-# .\Get-detect.ps1 -Detect .\detect_apps.json
-
-# Writen by Luiz Monteiro 
-
-####
-
-
+[CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true, ParameterSetName='Hardware')]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Hardware')]
     [switch]$Hardware,
     
-    [Parameter(Mandatory=$true, ParameterSetName='Software')]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Software')]
     [switch]$Software,
     
-    [Parameter(ParameterSetName='Software')]
+    [Parameter(ParameterSetName = 'Software')]
     [switch]$CurrentUser,
 
-    [Parameter(Mandatory=$true, ParameterSetName='Detect')]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Detect')]
+    [ValidateScript({ Test-Path $_ })]
     [string]$Detect
 )
 
-function Get-HardwareInfo {
-    $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem
-    $os = Get-CimInstance -ClassName Win32_OperatingSystem
-    $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID = 'C:'"
+# Import common functions from module
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Import-Module (Join-Path $scriptDir "InventoryCommon.psm1") -Force
 
-    Write-Host "Hardware Information"
-    Write-Host "-------------------"
-    Write-Host "Make: $($computerSystem.Manufacturer)"
-    Write-Host "Model: $($computerSystem.Model)"
-    Write-Host "OS Name: $($os.Caption)"
-    Write-Host "OS Version: $($os.Version)"
-    Write-Host "Total Physical Memory: $([math]::Round($computerSystem.TotalPhysicalMemory / 1GB, 2)) GB"
-    Write-Host "Free Disk Space (C:): $([math]::Round($disk.FreeSpace / 1GB, 2)) GB"
-}
-
-function Get-SoftwareInfo {
-    param([switch]$CurrentUser)
-
-    if ($CurrentUser) {
-        $uninstallPaths = @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*')
-    }
-    else {
-        $uninstallPaths = @(
-            'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
-            'HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-        )
-    }
-
-    $apps = Get-ChildItem -Path $uninstallPaths | ForEach-Object { Get-ItemProperty $_.PSPath }
-
-    Write-Host "`nSoftware Information"
-    Write-Host "-------------------"
-    
-    foreach ($app in $apps) {
-        if (-not $app.DisplayName) { continue }
-
-        $installDate = $app.InstallDate
-        if ($installDate -match '^\d{8}$') {
-            $installDate = [datetime]::ParseExact($installDate, 'yyyyMMdd', $null).ToString('yyyy-MM-dd')
-        }
-
-        Write-Host "Name: $($app.DisplayName)"
-        Write-Host "Version: $($app.DisplayVersion)"
-        Write-Host "Install Date: $installDate"
-        Write-Host "Uninstall String: $($app.UninstallString)"
-        Write-Host "`n"
-    }
-}
-
-function Invoke-Detection {
-    param(
-        [string]$CheckFilePath
-    )
-
+<#
+.SYNOPSIS
+    Displays hardware information in a formatted manner.
+#>
+function Show-HardwareInfo {
     try {
-        $checkFile = Get-Content $CheckFilePath -Raw | ConvertFrom-Json
+        $hardware = Get-HardwareInfo
+        
+        Write-Host "`n=== Hardware Information ===" -ForegroundColor Cyan
+        Write-Host "Make:               $($hardware.Make)"
+        Write-Host "Model:              $($hardware.Model)"
+        Write-Host "OS Name:            $($hardware.OSName)"
+        Write-Host "OS Version:         $($hardware.OSVersion)"
+        Write-Host "Total Physical Memory: $($hardware.TotalPhysicalMemoryGB) GB"
+        Write-Host "Free Disk Space (C:): $($hardware.FreeDiskSpaceGB) GB"
+        Write-Host ""
     }
     catch {
-        Write-Host "Error loading check file: $_"
+        Write-Error "Failed to display hardware information: $_"
         exit 1
     }
+}
 
-    $systemApps = @(
-        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
-        'HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    )
-    $installedApps = Get-ChildItem -Path $systemApps -ErrorAction SilentlyContinue | 
-        ForEach-Object { Get-ItemProperty $_.PSPath }
-
-    foreach ($targetApp in $checkFile.Applications) {
-        $app = $installedApps | Where-Object { $_.DisplayName -eq $targetApp.Name }
-
-        Write-Host "`nChecking: $($targetApp.Name)"
-        Write-Host "----------------------------"
-
-        if (-not $app) {
-            Write-Host "Status: No version installed"
-            continue
+<#
+.SYNOPSIS
+    Displays software information in a formatted manner.
+#>
+function Show-SoftwareInfo {
+    param([switch]$CurrentUser)
+    
+    try {
+        $software = Get-SoftwareInfo -CurrentUser:$CurrentUser
+        
+        if (-not $software) {
+            Write-Host "No software found."
+            return
         }
-
-        try {
-            $installedVersion = [version]$app.DisplayVersion
-            $targetVersion = [version]$targetApp.Version
-
-            if ($installedVersion -eq $targetVersion) {
-                Write-Host "Status: App already installed (exact version match)"
-            }
-            elseif ($installedVersion -lt $targetVersion) {
-                Write-Host "Status: Older version installed (installed: $($app.DisplayVersion), required: $($targetApp.Version)"
-            }
-            else {
-                Write-Host "Status: App installed with newer version (installed: $($app.DisplayVersion), required: $($targetApp.Version))"
-            }
+        
+        Write-Host "`n=== Software Information ===" -ForegroundColor Cyan
+        Write-Host "Total applications found: $($software.Count)`n"
+        
+        foreach ($app in $software) {
+            Write-Host "Name:             $($app.Name)"
+            Write-Host "Version:          $($app.Version)"
+            Write-Host "Install Date:     $($app.InstallDate)"
+            Write-Host "Publisher:        $($app.Publisher)"
+            Write-Host "Uninstall String: $($app.UninstallString)"
+            Write-Host "---"
         }
-        catch {
-            if ($app.DisplayVersion -eq $targetApp.Version) {
-                Write-Host "Status: App already installed (exact version match)"
-            }
-            else {
-                Write-Host "Status: Version mismatch (installed: $($app.DisplayVersion), required: $($targetApp.Version))"
-            }
-        }
+    }
+    catch {
+        Write-Error "Failed to display software information: $_"
+        exit 1
     }
 }
 
-# Main execution
-if ($Hardware) {
-    Get-HardwareInfo
+<#
+.SYNOPSIS
+    Displays detection results in a formatted manner.
+#>
+function Show-DetectionResults {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CheckFilePath
+    )
+    
+    try {
+        $results = Invoke-Detection -CheckFilePath $CheckFilePath
+        
+        Write-Host "`n=== Application Detection Results ===" -ForegroundColor Cyan
+        Write-Host ""
+        
+        foreach ($result in $results) {
+            $statusColor = switch ($result.Status) {
+                "Match"           { "Green" }
+                "UpgradeRequired" { "Yellow" }
+                "NotFound"        { "Red" }
+                default           { "White" }
+            }
+            
+            Write-Host "Application: $($result.ApplicationName)" -ForegroundColor White
+            Write-Host "Target Version: $($result.TargetVersion)"
+            Write-Host "Installed Version: $($result.InstalledVersion)"
+            Write-Host "Status: $($result.Status)" -ForegroundColor $statusColor
+            Write-Host "Details: $($result.Message)"
+            Write-Host "---"
+        }
+    }
+    catch {
+        Write-Error "Failed to perform detection: $_"
+        exit 1
+    }
 }
-elseif ($Software) {
-    Get-SoftwareInfo -CurrentUser:$CurrentUser
+
+# Main execution logic
+try {
+    if ($Hardware) {
+        Show-HardwareInfo
+    }
+    elseif ($Software) {
+        Show-SoftwareInfo -CurrentUser:$CurrentUser
+    }
+    elseif ($Detect) {
+        Show-DetectionResults -CheckFilePath $Detect
+    }
 }
-elseif ($Detect) {
-    Invoke-Detection -CheckFilePath $Detect
+catch {
+    Write-Error "Script execution failed: $_"
+    exit 1
 }
