@@ -1,85 +1,95 @@
-﻿#Usage Mode
+# Get-Inventory.ps1
+# Inventory script for retrieving hardware and software information
+# Author: Luiz Monteiro
 
-# Hardware mode
-# .\Get-Inventory.ps1 -Hardware
+# Usage Examples:
+# Hardware mode:  .\Get-Inventory.ps1 -Hardware
+# Software mode:  .\Get-Inventory.ps1 -Software
+# Current user:   .\Get-Inventory.ps1 -Software -CurrentUser
+# Note: To bypass execution policy: powershell -ExecutionPolicy Bypass -File "C:\Path\To\Get-Inventory.ps1"
 
-# Software mode
-# .\Get-Inventory.ps1 -Software
-
-# Software mode (current user)
-# .\Get-Inventory.ps1 -Software -CurrentUser
-
-#note: PowerShell has built-in security to prevent the execution of potentially malicious scripts. The execution policy determines the conditions under which scripts can run
-#use the parameter below, This will allow that script to run even if the execution policy is more restrictive
-#powershell -ExecutionPolicy Bypass -File "C:\Path\To\Get-Inventory.ps1"
-
-# Writen by Luiz Monteiro 
-
-##################
-
+[CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true, ParameterSetName='Hardware')]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Hardware')]
     [switch]$Hardware,
     
-    [Parameter(Mandatory=$true, ParameterSetName='Software')]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Software')]
     [switch]$Software,
     
-    [Parameter(ParameterSetName='Software')]
+    [Parameter(ParameterSetName = 'Software')]
     [switch]$CurrentUser
 )
 
-function Get-HardwareInfo {
-    $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem
-    $os = Get-CimInstance -ClassName Win32_OperatingSystem
-    $disk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID = 'C:'"
+# Import common functions from module
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Import-Module (Join-Path $scriptDir "InventoryCommon.psm1") -Force
 
-    Write-Host "Hardware Information"
-    Write-Host "-------------------"
-    Write-Host "Make: $($computerSystem.Manufacturer)"
-    Write-Host "Model: $($computerSystem.Model)"
-    Write-Host "OS Name: $($os.Caption)"
-    Write-Host "OS Version: $($os.Version)"
-    Write-Host "Total Physical Memory: $([math]::Round($computerSystem.TotalPhysicalMemory / 1GB, 2)) GB"
-    Write-Host "Free Disk Space (C:): $([math]::Round($disk.FreeSpace / 1GB, 2)) GB"
+<#
+.SYNOPSIS
+    Displays hardware information in a formatted manner.
+#>
+function Show-HardwareInfo {
+    try {
+        $hardware = Get-HardwareInfo
+        
+        Write-Host "`n=== Hardware Information ===" -ForegroundColor Cyan
+        Write-Host "Make:               $($hardware.Make)"
+        Write-Host "Model:              $($hardware.Model)"
+        Write-Host "OS Name:            $($hardware.OSName)"
+        Write-Host "OS Version:         $($hardware.OSVersion)"
+        Write-Host "Total Physical Memory: $($hardware.TotalPhysicalMemoryGB) GB"
+        Write-Host "Free Disk Space (C:): $($hardware.FreeDiskSpaceGB) GB"
+        Write-Host ""
+    }
+    catch {
+        Write-Error "Failed to display hardware information: $_"
+        exit 1
+    }
 }
 
-function Get-SoftwareInfo {
+<#
+.SYNOPSIS
+    Displays software information in a formatted manner.
+#>
+function Show-SoftwareInfo {
     param([switch]$CurrentUser)
-
-    if ($CurrentUser) {
-        $uninstallPaths = @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*')
-    }
-    else {
-        $uninstallPaths = @(
-            'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
-            'HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-        )
-    }
-
-    $apps = Get-ChildItem -Path $uninstallPaths | ForEach-Object { Get-ItemProperty $_.PSPath }
-
-    Write-Host "`nSoftware Information"
-    Write-Host "-------------------"
     
-    foreach ($app in $apps) {
-        if (-not $app.DisplayName) { continue }
-
-        $installDate = $app.InstallDate
-        if ($installDate -match '^\d{8}$') {
-            $installDate = [datetime]::ParseExact($installDate, 'yyyyMMdd', $null).ToString('yyyy-MM-dd')
+    try {
+        $software = Get-SoftwareInfo -CurrentUser:$CurrentUser
+        
+        if (-not $software) {
+            Write-Host "No software found."
+            return
         }
-
-        Write-Host "Name: $($app.DisplayName)"
-        Write-Host "Version: $($app.DisplayVersion)"
-        Write-Host "Install Date: $installDate"
-        Write-Host "Uninstall String: $($app.UninstallString)"
-        Write-Host "`n"
+        
+        Write-Host "`n=== Software Information ===" -ForegroundColor Cyan
+        Write-Host "Total applications found: $($software.Count)`n"
+        
+        foreach ($app in $software) {
+            Write-Host "Name:             $($app.Name)"
+            Write-Host "Version:          $($app.Version)"
+            Write-Host "Install Date:     $($app.InstallDate)"
+            Write-Host "Publisher:        $($app.Publisher)"
+            Write-Host "Uninstall String: $($app.UninstallString)"
+            Write-Host "---"
+        }
+    }
+    catch {
+        Write-Error "Failed to display software information: $_"
+        exit 1
     }
 }
 
-if ($Hardware) {
-    Get-HardwareInfo
+# Main execution logic
+try {
+    if ($Hardware) {
+        Show-HardwareInfo
+    }
+    elseif ($Software) {
+        Show-SoftwareInfo -CurrentUser:$CurrentUser
+    }
 }
-elseif ($Software) {
-    Get-SoftwareInfo -CurrentUser:$CurrentUser
+catch {
+    Write-Error "Script execution failed: $_"
+    exit 1
 }
